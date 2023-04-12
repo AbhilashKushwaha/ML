@@ -1,0 +1,11 @@
+EmployeeId,JobTitle,Department,LengthOfService,Reason,ManagerApproval
+1,Developer,IT,3,Sick,0
+2,Manager,Sales,5,Vacation,1
+3,Analyst,Marketing,2,Personal,0
+4,Developer,IT,4,Vacation,1
+5,Manager,Finance,6,Sick,0
+6,Analyst,Marketing,1,Personal,1
+7,Developer,IT,2,Sick,0
+8,Manager,Sales,4,Vacation,1
+9,Analyst,Marketing,3,Sick,0
+10,Developer,IT,5,Vacation,1
