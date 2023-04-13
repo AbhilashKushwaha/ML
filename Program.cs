@@ -1,5 +1,6 @@
 ﻿
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using Microsoft.ML;
@@ -63,6 +64,32 @@ namespace LeaveApprovalPrediction
         [LoadColumn(4)]
         public float LeaveStatus;
     }
+
+    public class TeamCapacityModel
+    {
+        [LoadColumn(0)]
+        public DateTime Date;
+        [LoadColumn(1)]
+        public float Team_Capacity;
+        [LoadColumn(2)]
+        public float Dept_Capacity;
+        [LoadColumn(3)]
+        public float Approval_Rate;
+        [LoadColumn(4)]
+        public string Manager_Id;
+
+        public static TeamCapacityModel FromCsv(string csvLine)
+        {
+            string[] values = csvLine.Split(',');
+            TeamCapacityModel dailyValues = new TeamCapacityModel();
+            dailyValues.Date = Convert.ToDateTime(values[0]);
+            dailyValues.Team_Capacity = float.Parse(values[1], CultureInfo.InvariantCulture.NumberFormat);
+            dailyValues.Dept_Capacity = float.Parse(values[2], CultureInfo.InvariantCulture.NumberFormat);
+            dailyValues.Approval_Rate = float.Parse(values[3], CultureInfo.InvariantCulture.NumberFormat);
+            dailyValues.Manager_Id = values[4];
+            return dailyValues;
+        }
+    }
     public class LeaveDataOutput
     {
         [ColumnName("Score")]
@@ -87,92 +114,81 @@ namespace LeaveApprovalPrediction
     {
         static void Main(string[] args)
         {
-            
-            string trainPath = "C:/D Drive/Abhilash/Projects/Prediction/Prediction/taxi-fare-train.csv";
+
             string leavePath = "C:/D Drive/Abhilash/Projects/Prediction/Prediction/OpenAidata.csv";
+            string teamCapacityData = "C:/D Drive/Abhilash/Projects/Prediction/Prediction/TeamCapacityData.csv";
 
-            if (true)
+            MLContext mlContext = new MLContext();
+
+            // 2. Load training data
+            IDataView trainData = mlContext.Data.LoadFromTextFile<LeaveDataInput>(leavePath, separatorChar: ',');
+            List<TeamCapacityModel> values = File.ReadAllLines(teamCapacityData)
+                                       .Skip(1)
+                                       .Select(v => TeamCapacityModel.FromCsv(v))
+                                       .ToList();
+            
+
+            // 3. Add data transformations
+            var dataProcessPipeline = mlContext.Transforms.Categorical.OneHotEncoding(
+                outputColumnName: "ManagerIdEncoded", "ManagerId")
+                .Append(mlContext.Transforms.Concatenate(outputColumnName: "Features",
+                "ManagerIdEncoded", "LeaveDateInterval", "TeamCapacity", "RoleCapacity"));
+
+            // 4. Add algorithm
+            var trainer = mlContext.Regression.Trainers.Sdca(labelColumnName: "LeaveStatus", featureColumnName: "Features");
+
+            var trainingPipeline = dataProcessPipeline.Append(trainer);
+
+            // 5. Train model
+            var model = trainingPipeline.Fit(trainData);
+
+            // 6. Evaluate model on test data
+            IDataView testData = mlContext.Data.LoadFromTextFile<LeaveDataInput>(leavePath);
+            IDataView predictions = model.Transform(testData);
+            var metrics = mlContext.Regression.Evaluate(predictions, "LeaveStatus");
+
+            // data from user
+            Console.WriteLine($"Enter leave date:");
+            var userDateInput = Console.ReadLine();
+
+            var convertedDate = DateTime.Parse(userDateInput, null, DateTimeStyles.None);
+            var masterData = values.Find(x => x.Date == convertedDate);
+
+            if (convertedDate < DateTime.Today || float.Parse(DateTime.Today.Subtract(convertedDate).TotalDays.ToString()) > 90)
             {
-                MLContext mlContext = new MLContext();
+                //Console.WriteLine($"ML value: {result.LeaveStatus}\n");
+                Console.WriteLine($"High Chances that your manager will REJECT");
+                return;
+            }
 
-                // 2. Load training data
-                IDataView trainData = mlContext.Data.LoadFromTextFile<LeaveDataInput>(leavePath, separatorChar: ',');
+            if (masterData == null && convertedDate > DateTime.Today)
+            {
+                // we are assuming that master data in not present for that date and full team capacity is available
+                Console.WriteLine($"Cannot predict approval probability for this date due to lack of past data.");
+                return;
+            }
 
-                // 3. Add data transformations
-                var dataProcessPipeline = mlContext.Transforms.Categorical.OneHotEncoding(
-                    outputColumnName: "ManagerIdEncoded", "ManagerId")
-                    .Append(mlContext.Transforms.Concatenate(outputColumnName: "Features",
-                    "ManagerIdEncoded", "LeaveDateInterval", "TeamCapacity", "RoleCapacity"));
+            // 7. Predict on sample data and print results
+            var input = new LeaveDataInput
+            {
+                ManagerId = masterData.Manager_Id,
+                LeaveDateInterval = float.Parse(convertedDate.Subtract(DateTime.Today).TotalDays.ToString()),
+                RoleCapacity = masterData.Dept_Capacity,
+                TeamCapacity = masterData.Team_Capacity
+            };
 
-                // 4. Add algorithm
-                var trainer = mlContext.Regression.Trainers.Sdca(labelColumnName: "LeaveStatus", featureColumnName: "Features");
-
-                var trainingPipeline = dataProcessPipeline.Append(trainer);
-
-                // 5. Train model
-                var model = trainingPipeline.Fit(trainData);
-
-                // 6. Evaluate model on test data
-                IDataView testData = mlContext.Data.LoadFromTextFile<LeaveDataInput>(leavePath);
-                IDataView predictions = model.Transform(testData);
-                var metrics = mlContext.Regression.Evaluate(predictions, "LeaveStatus");
-
-                // 7. Predict on sample data and print results
-                var input = new LeaveDataInput
-                {
-                    ManagerId = "M1",
-                    LeaveDateInterval = 77,
-                    RoleCapacity = 0.69f,
-                    TeamCapacity = 0.68f
-                };
-
-                var result = mlContext.Model.CreatePredictionEngine<LeaveDataInput, LeaveDataOutput>(model).Predict(input);
-
-                Console.WriteLine($"Predicted fare: {result.LeaveStatus}\n");
+            var result = mlContext.Model.CreatePredictionEngine<LeaveDataInput, LeaveDataOutput>(model).Predict(input);
+            if (result.LeaveStatus > 0)
+            {
+                Console.WriteLine($"ML value: {result.LeaveStatus}\n");
+                Console.WriteLine($"High Chances that your manager will APPROVE");
             }
             else
             {
-                //https://www.codemag.com/Article/1911042/ML.NET-Machine-Learning-for-.NET-Developers
-                // Create a new MLContext
-                // 1. Initalize ML.NET environment
-                MLContext mlContext = new MLContext();
-
-                // 2. Load training data
-                IDataView trainData = mlContext.Data.LoadFromTextFile<ModelInput>(trainPath, separatorChar: ',');
-
-                // 3. Add data transformations
-                var dataProcessPipeline = mlContext.Transforms.Categorical.OneHotEncoding(
-                    outputColumnName: "PaymentTypeEncoded", "PaymentType")
-                    .Append(mlContext.Transforms.Concatenate(outputColumnName: "Features",
-                    "PaymentTypeEncoded", "PassengerCount", "TripTime", "TripDistance"));
-
-                // 4. Add algorithm
-                var trainer = mlContext.Regression.Trainers.Sdca(labelColumnName: "FareAmount", featureColumnName: "Features");
-
-                var trainingPipeline = dataProcessPipeline.Append(trainer);
-
-                // 5. Train model
-                var model = trainingPipeline.Fit(trainData);
-
-                // 6. Evaluate model on test data
-                IDataView testData = mlContext.Data.LoadFromTextFile<ModelInput>(trainPath);
-                IDataView predictions = model.Transform(testData);
-                var metrics = mlContext.Regression.Evaluate(predictions, "FareAmount");
-
-                // 7. Predict on sample data and print results
-                var input = new ModelInput
-                {
-                    PassengerCount = 1,
-                    TripTime = 1150,
-                    TripDistance = 4,
-                    PaymentType = "CRD"
-                };
-
-                var result = mlContext.Model.CreatePredictionEngine<ModelInput, ModelOutput>(model).Predict(input);
-
-                Console.WriteLine($"Predicted fare: {result.FareAmount}\nModel Quality (RSquared): {metrics.RSquared}");
+                Console.WriteLine($"ML value: {result.LeaveStatus}\n");
+                Console.WriteLine($"High Chances that your manager will REJECT");
             }
-            
+
         }
     }
 }
